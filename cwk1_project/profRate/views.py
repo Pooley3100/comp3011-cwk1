@@ -7,9 +7,10 @@ from django.contrib import auth
 from django.views.decorators.csrf import csrf_exempt
 import json
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
-from profRate.models import Professor, Module, Rating
+from profRate.models import ModuleInstance, Professor, Module, Rating
 from django.core import serializers
 from django.db import IntegrityError
+import math
 
 # Register Account, Must be post, login not required. 
 @csrf_exempt
@@ -70,22 +71,31 @@ def view_modules(request):
         http_bad_response.content = 'Only GET requests are allowed for the register resource\n'
         return http_bad_response
     
-    modules = Module.objects.all()
+    modules = ModuleInstance.objects.all()
     json_package = []
     for module in modules:
         prof_names = []
         professors = module.professors.all()
         for professor in professors:
-            prof_names.append(professor.professor_id + ', ' + professor.name)
+            prof_names.append(professor.professor_id + ', Professor ' + professor.name)
 
-        module = module.__dict__
-        del module['_state']
-        module['professors'] = prof_names
+        module_package = {}
+        module_package['module_name'] = module.module.module_name
+        module_package['academic_year'] = module.academic_year
+        module_package['module_code'] = module.module.module_code
+        module_package['semester'] = module.semester
+        module_package['professors'] = prof_names
         
-        json_package.append(module)
+        json_package.append(module_package)
     modules = json.dumps(json_package)
 
     return HttpResponse(modules, content_type="application/json")
+
+# Instead of using python round which uses bankers rounding do this instead so .5 is always rounded up. 
+def normal_round(n):
+    if n - math.floor(n) < 0.5:
+        return math.floor(n)
+    return math.ceil(n)
 
 # Given prof id and optional module id calculates average rating and returns number rounded.
 def calc_average(prof_id, module_id=None):
@@ -101,16 +111,16 @@ def calc_average(prof_id, module_id=None):
             total.append(int(rating['rating']))
 
         try: 
-            average = round(mean(total))
+            average = normal_round(mean(total))
         except StatisticsError:
             average = 0
 
         return average
     else:
-        modules = Module.objects.all()
+        modules = ModuleInstance.objects.all()
         module_ids = []
         for module in modules:
-            if module.module_code == module_id:
+            if module.module.module_code == module_id:
                 module_ids.append(module.id)
         
         total = []
@@ -123,7 +133,7 @@ def calc_average(prof_id, module_id=None):
                 total.append(int(rating['rating']))
 
         try:
-            average = round(mean(total))
+            average = normal_round(mean(total))
         except StatisticsError:
             average = 0
 
@@ -206,7 +216,7 @@ def rate(request):
 
     # Check rating within bounds, professor exists and module code exists
     if int(package['rating']) > 5 or int(package['rating']) < 1:
-        http_bad_response.content = 'Only POST requests are allowed for the register resource\n'
+        http_bad_response.content = 'Rating not within range of 1 to 5 \n'
         return http_bad_response
 
     try:
@@ -216,11 +226,18 @@ def rate(request):
         return http_bad_response
 
     try:
-        module = Module.objects.get(module_code = package['module_code'], academic_year=package['year'], semester=package['semester'])
+        moduleMain = Module.objects.get(module_code = package['module_code'])
+        module = ModuleInstance.objects.get(module = moduleMain, academic_year=package['year'], semester=package['semester'])
     except Module.MultipleObjectsReturned:
         http_bad_response.content = 'Multiple Modules found'
         return http_bad_response
     except Module.DoesNotExist:
+        http_bad_response.content = 'Module Not Found'
+        return http_bad_response
+    except ModuleInstance.MultipleObjectsReturned:
+        http_bad_response.content = 'Multiple Modules found'
+        return http_bad_response
+    except ModuleInstance.DoesNotExist:
         http_bad_response.content = 'Module Not Found'
         return http_bad_response
 
